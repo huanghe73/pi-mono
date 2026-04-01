@@ -82,6 +82,53 @@ export interface ConvertResponsesToolsOptions {
 }
 
 // =============================================================================
+// Computer Use action conversion helpers
+// =============================================================================
+
+/**
+ * Convert an OpenAI SDK computer action (singular or batched) into our internal ComputerAction.
+ * Handles all action types: click, double_click, drag, keypress, move, screenshot, scroll, type, wait.
+ */
+function parseOpenAIComputerAction(a: Record<string, unknown>): ComputerAction {
+	const action: ComputerAction = { type: a.type as ComputerAction["type"] };
+	// Coordinates: click, double_click, move, scroll
+	if (typeof a.x === "number") action.x = a.x;
+	if (typeof a.y === "number") action.y = a.y;
+	// Click button
+	if (typeof a.button === "string") action.button = a.button as ComputerAction["button"];
+	// Type text
+	if (typeof a.text === "string") action.text = a.text;
+	// Keypress keys
+	if (Array.isArray(a.keys)) action.keys = a.keys;
+	// Scroll deltas
+	if (typeof a.scroll_x === "number") action.deltaX = a.scroll_x;
+	if (typeof a.scroll_y === "number") action.deltaY = a.scroll_y;
+	// Drag path → store as-is in a future-proof way; for now map start/end to x/y
+	if (Array.isArray(a.path) && a.path.length > 0) {
+		const start = a.path[0] as { x?: number; y?: number };
+		if (typeof start.x === "number") action.x = start.x;
+		if (typeof start.y === "number") action.y = start.y;
+	}
+	return action;
+}
+
+/**
+ * Convert our internal ComputerAction back to the OpenAI SDK shape for replay.
+ * Produces the singular `action` object expected by ResponseComputerToolCall.
+ */
+function serializeOpenAIComputerAction(a: ComputerAction): Record<string, unknown> {
+	const out: Record<string, unknown> = { type: a.type };
+	if (a.x !== undefined) out.x = a.x;
+	if (a.y !== undefined) out.y = a.y;
+	if (a.button) out.button = a.button;
+	if (a.text) out.text = a.text;
+	if (a.keys) out.keys = a.keys;
+	if (a.deltaX !== undefined) out.scroll_x = a.deltaX;
+	if (a.deltaY !== undefined) out.scroll_y = a.deltaY;
+	return out;
+}
+
+// =============================================================================
 // Message conversion
 // =============================================================================
 
@@ -193,20 +240,26 @@ export function convertResponsesMessages<TApi extends Api>(
 						phase: parsedSignature?.phase,
 					} satisfies ResponseOutputMessage);
 				} else if (block.type === "computerCall") {
-					// Replay prior computer_call items so the API can pair them with computer_call_output
+					// Replay prior computer_call items so the API can pair them with computer_call_output.
+					// The SDK shape has both singular `action` and batched `actions`.
 					const cuBlock = block as ComputerCall;
-					output.push({
+					const replayItem: Record<string, unknown> = {
 						type: "computer_call",
 						id: cuBlock.itemId || cuBlock.id,
 						call_id: cuBlock.id,
-						action: cuBlock.actions[0] ? {
-							type: cuBlock.actions[0].type,
-							...(cuBlock.actions[0].x !== undefined && { x: cuBlock.actions[0].x }),
-							...(cuBlock.actions[0].y !== undefined && { y: cuBlock.actions[0].y }),
-							...(cuBlock.actions[0].text && { text: cuBlock.actions[0].text }),
-						} : { type: "screenshot" },
 						status: "completed",
-					} as any);
+						pending_safety_checks: [],
+					};
+					if (cuBlock.actions.length === 1) {
+						// Singular action (most common path)
+						replayItem.action = serializeOpenAIComputerAction(cuBlock.actions[0]);
+					} else if (cuBlock.actions.length > 1) {
+						// Batched actions
+						replayItem.actions = cuBlock.actions.map(serializeOpenAIComputerAction);
+					} else {
+						replayItem.action = { type: "screenshot" };
+					}
+					output.push(replayItem as any);
 				} else if (block.type === "toolCall") {
 					const toolCall = block as ToolCall;
 					const [callId, itemIdRaw] = toolCall.id.split("|");
@@ -477,26 +530,20 @@ export async function processResponsesStream<TApi extends Api>(
 				currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
 			}
 		} else if (event.type === "response.output_item.done" && (event.item as { type: string }).type === "computer_call") {
-			// OpenAI Computer Use: computer_call completed
-			// The OpenAI SDK exposes a singular `action` object (not an `actions` array),
-			// with `scroll_x`/`scroll_y` for scroll actions.
-			const item = event.item as unknown as ComputerCallItem & { action?: Record<string, unknown> };
+			// OpenAI Computer Use: computer_call completed.
+			// The SDK exposes both a singular `action` and a batched `actions` field.
+			const item = event.item as unknown as ComputerCallItem & {
+				action?: Record<string, unknown>;
+				actions?: Array<Record<string, unknown>>;
+			};
 			if (currentBlock?.type === "computerCall") {
 				currentBlock.id = item.call_id || item.id || currentBlock.id;
 				currentBlock.itemId = item.id || currentBlock.itemId;
-				// Parse the singular action from the completed item
-				const a = item.action;
-				if (a) {
-					currentBlock.actions = [{
-						type: a.type as ComputerAction["type"],
-						x: a.x as number | undefined,
-						y: a.y as number | undefined,
-						text: a.text as string | undefined,
-						keys: a.keys as string[] | undefined,
-						deltaX: (a.scroll_x ?? a.delta_x) as number | undefined,
-						deltaY: (a.scroll_y ?? a.delta_y) as number | undefined,
-						button: a.button as ComputerAction["button"],
-					}];
+				// Prefer batched `actions` if present, fall back to singular `action`
+				if (item.actions && item.actions.length > 0) {
+					currentBlock.actions = item.actions.map(parseOpenAIComputerAction);
+				} else if (item.action) {
+					currentBlock.actions = [parseOpenAIComputerAction(item.action)];
 				}
 				const computerCall = currentBlock;
 				currentBlock = null;
