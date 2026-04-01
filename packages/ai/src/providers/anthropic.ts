@@ -10,6 +10,8 @@ import type {
 	Api,
 	AssistantMessage,
 	CacheRetention,
+	ComputerCall,
+	ComputerCallResultMessage,
 	Context,
 	ImageContent,
 	Message,
@@ -247,6 +249,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 					options?.interleavedThinking ?? true,
 					options?.headers,
 					copilotDynamicHeaders,
+					!!context.computerUse,
 				);
 				client = created.client;
 				isOAuth = created.isOAuthToken;
@@ -259,7 +262,12 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			const anthropicStream = client.messages.stream({ ...params, stream: true }, { signal: options?.signal });
 			stream.push({ type: "start", partial: output });
 
-			type Block = (ThinkingContent | TextContent | (ToolCall & { partialJson: string })) & { index: number };
+			type Block = (
+				| ThinkingContent
+				| TextContent
+				| (ToolCall & { partialJson: string })
+				| (ComputerCall & { partialJson: string })
+			) & { index: number };
 			const blocks = output.content as Block[];
 
 			for await (const event of anthropicStream) {
@@ -303,6 +311,17 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 						};
 						output.content.push(block);
 						stream.push({ type: "thinking_start", contentIndex: output.content.length - 1, partial: output });
+					} else if (event.content_block.type === "tool_use" && event.content_block.name === "computer") {
+						// Anthropic Computer Use: tool_use with name "computer" → ComputerCall
+						const block: any = {
+							type: "computerCall",
+							id: event.content_block.id,
+							actions: [],
+							partialJson: "",
+							index: event.index,
+						};
+						output.content.push(block);
+						stream.push({ type: "computercall_start", contentIndex: output.content.length - 1, partial: output });
 					} else if (event.content_block.type === "tool_use") {
 						const block: Block = {
 							type: "toolCall",
@@ -345,7 +364,10 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 					} else if (event.delta.type === "input_json_delta") {
 						const index = blocks.findIndex((b) => b.index === event.index);
 						const block = blocks[index];
-						if (block && block.type === "toolCall") {
+						if (block && block.type === "computerCall") {
+							// Computer use: accumulate JSON for parsing actions at block_stop
+							(block as any).partialJson = ((block as any).partialJson || "") + event.delta.partial_json;
+						} else if (block && block.type === "toolCall") {
 							block.partialJson += event.delta.partial_json;
 							block.arguments = parseStreamingJson(block.partialJson);
 							stream.push({
@@ -380,6 +402,25 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 								type: "thinking_end",
 								contentIndex: index,
 								content: block.thinking,
+								partial: output,
+							});
+						} else if (block.type === "computerCall") {
+							// Parse the accumulated JSON into ComputerAction
+							const partialJson = (block as any).partialJson || "{}";
+							delete (block as any).partialJson;
+							const input = parseStreamingJson(partialJson) as Record<string, any>;
+							block.actions = [
+								{
+									type: input.action || "screenshot",
+									x: input.coordinate?.[0],
+									y: input.coordinate?.[1],
+									text: input.text,
+								},
+							];
+							stream.push({
+								type: "computercall_end",
+								contentIndex: index,
+								computerCall: block as ComputerCall,
 								partial: output,
 							});
 						} else if (block.type === "toolCall") {
@@ -424,6 +465,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 
 			if (output.stopReason === "aborted" || output.stopReason === "error") {
 				throw new Error("An unknown error occurred");
+			}
+
+			// Detect computer use stop reason
+			if (output.content.some((b) => b.type === "computerCall") && output.stopReason === "toolUse") {
+				output.stopReason = "computerUse";
 			}
 
 			stream.push({ type: "done", reason: output.stopReason, message: output });
@@ -525,6 +571,7 @@ function createClient(
 	interleavedThinking: boolean,
 	optionsHeaders?: Record<string, string>,
 	dynamicHeaders?: Record<string, string>,
+	hasComputerUse?: boolean,
 ): { client: Anthropic; isOAuthToken: boolean } {
 	// Adaptive thinking models (Opus 4.6, Sonnet 4.6) have interleaved thinking built-in.
 	// The beta header is deprecated on Opus 4.6 and redundant on Sonnet 4.6, so skip it.
@@ -560,6 +607,10 @@ function createClient(
 	const betaFeatures = ["fine-grained-tool-streaming-2025-05-14"];
 	if (needsInterleavedBeta) {
 		betaFeatures.push("interleaved-thinking-2025-05-14");
+	}
+	// Computer use requires its own beta header
+	if (hasComputerUse) {
+		betaFeatures.push("computer-use-2025-11-24");
 	}
 
 	// OAuth: Bearer auth, Claude Code identity headers
@@ -652,6 +703,18 @@ function buildParams(
 
 	if (context.tools) {
 		params.tools = convertTools(context.tools, isOAuthToken);
+	}
+
+	// Append computer use tool if requested
+	if (context.computerUse) {
+		const cuTool: any = {
+			type: "computer_20251124",
+			name: "computer",
+			display_width_px: context.computerUse.displayWidth || 1024,
+			display_height_px: context.computerUse.displayHeight || 768,
+		};
+		params.tools = params.tools || [];
+		(params.tools as any[]).push(cuTool);
 	}
 
 	// Configure thinking mode: adaptive (Opus 4.6 and Sonnet 4.6),
@@ -787,6 +850,20 @@ function convertMessages(
 							signature: block.thinkingSignature,
 						});
 					}
+				} else if (block.type === "computerCall") {
+					// Re-emit computer use as tool_use with name "computer" for Anthropic
+					const action = block.actions[0];
+					const input: Record<string, any> = { action: action?.type || "screenshot" };
+					if (action?.x !== undefined && action?.y !== undefined) {
+						input.coordinate = [action.x, action.y];
+					}
+					if (action?.text) input.text = action.text;
+					blocks.push({
+						type: "tool_use",
+						id: block.id,
+						name: "computer",
+						input,
+					} as any);
 				} else if (block.type === "toolCall") {
 					blocks.push({
 						type: "tool_use",
@@ -800,6 +877,20 @@ function convertMessages(
 			params.push({
 				role: "assistant",
 				content: blocks,
+			});
+		} else if (msg.role === "computerCallResult") {
+			// Computer use result: send back as tool_result with screenshot
+			const cuMsg = msg as ComputerCallResultMessage;
+			const resultContent = convertContentBlocks(cuMsg.content);
+			params.push({
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						tool_use_id: cuMsg.callId,
+						content: resultContent,
+					} as any,
+				],
 			});
 		} else if (msg.role === "toolResult") {
 			// Collect all consecutive toolResult messages, needed for z.ai Anthropic endpoint

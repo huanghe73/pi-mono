@@ -2672,6 +2672,10 @@ export class InteractiveMode {
 				// Tool results are rendered inline with tool calls, handled separately
 				break;
 			}
+			case "computerCallResult": {
+				// Computer use results are handled alongside computer calls
+				break;
+			}
 			default: {
 				const _exhaustive: never = message;
 			}

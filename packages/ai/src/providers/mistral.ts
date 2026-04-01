@@ -492,10 +492,14 @@ function toChatMessages(messages: Message[], supportsImages: boolean): ChatCompl
 					}
 					continue;
 				}
+				if (block.type === "computerCall") continue; // Mistral doesn't support computer use
 				toolCalls.push({
 					id: block.id,
 					type: "function",
-					function: { name: block.name, arguments: JSON.stringify(block.arguments || {}) },
+					function: {
+						name: (block as import("../types.js").ToolCall).name,
+						arguments: JSON.stringify((block as import("../types.js").ToolCall).arguments || {}),
+					},
 				});
 			}
 
@@ -506,13 +510,20 @@ function toChatMessages(messages: Message[], supportsImages: boolean): ChatCompl
 			continue;
 		}
 
+		if (msg.role === "computerCallResult") continue; // Mistral doesn't support computer use
+
 		const toolContent: ContentChunk[] = [];
 		const textResult = msg.content
 			.filter((part) => part.type === "text")
 			.map((part) => (part.type === "text" ? sanitizeSurrogates(part.text) : ""))
 			.join("\n");
 		const hasImages = msg.content.some((part) => part.type === "image");
-		const toolText = buildToolResultText(textResult, hasImages, supportsImages, msg.isError);
+		const toolText = buildToolResultText(
+			textResult,
+			hasImages,
+			supportsImages,
+			(msg as import("../types.js").ToolResultMessage).isError,
+		);
 		toolContent.push({ type: "text", text: toolText });
 		for (const part of msg.content) {
 			if (!supportsImages) continue;
@@ -522,10 +533,11 @@ function toChatMessages(messages: Message[], supportsImages: boolean): ChatCompl
 				imageUrl: `data:${part.mimeType};base64,${part.data}`,
 			});
 		}
+		const toolResultMsg = msg as import("../types.js").ToolResultMessage;
 		result.push({
 			role: "tool",
-			toolCallId: msg.toolCallId,
-			name: msg.toolName,
+			toolCallId: toolResultMsg.toolCallId,
+			name: toolResultMsg.toolName,
 			content: toolContent,
 		});
 	}

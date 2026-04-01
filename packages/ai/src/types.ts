@@ -179,7 +179,7 @@ export interface Usage {
 	};
 }
 
-export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
+export type StopReason = "stop" | "length" | "toolUse" | "computerUse" | "error" | "aborted";
 
 export interface UserMessage {
 	role: "user";
@@ -189,7 +189,7 @@ export interface UserMessage {
 
 export interface AssistantMessage {
 	role: "assistant";
-	content: (TextContent | ThinkingContent | ToolCall)[];
+	content: (TextContent | ThinkingContent | ToolCall | ComputerCall)[];
 	api: Api;
 	provider: Provider;
 	model: string;
@@ -210,7 +210,7 @@ export interface ToolResultMessage<TDetails = any> {
 	timestamp: number; // Unix timestamp in milliseconds
 }
 
-export type Message = UserMessage | AssistantMessage | ToolResultMessage;
+export type Message = UserMessage | AssistantMessage | ToolResultMessage | ComputerCallResultMessage;
 
 import type { TSchema } from "@sinclair/typebox";
 
@@ -220,10 +220,78 @@ export interface Tool<TParameters extends TSchema = TSchema> {
 	parameters: TParameters;
 }
 
+// =============================================================================
+// Computer Use types
+// =============================================================================
+
+/**
+ * A computer use tool definition. Unlike regular function-calling tools,
+ * computer use tools have no user-defined parameters — the model natively
+ * understands how to emit structured screen actions.
+ *
+ * Provider mapping:
+ * - OpenAI Responses API: `{ type: "computer" }` in tools array
+ * - Anthropic Messages API: `{ type: "computer_20251124", name: "computer", display_width_px, display_height_px }`
+ */
+export interface ComputerUseTool {
+	type: "computer_use";
+	/** Display width in pixels (required by Anthropic, optional for OpenAI). */
+	displayWidth?: number;
+	/** Display height in pixels (required by Anthropic, optional for OpenAI). */
+	displayHeight?: number;
+}
+
+/** A single action returned by the model in a computer use call. */
+export interface ComputerAction {
+	type: "click" | "double_click" | "type" | "keypress" | "scroll" | "screenshot" | "drag" | "move" | "wait" | "zoom";
+	/** X coordinate (for click, double_click, drag, move). */
+	x?: number;
+	/** Y coordinate (for click, double_click, drag, move). */
+	y?: number;
+	/** Text to type (for type action). */
+	text?: string;
+	/** Keys to press (for keypress action). */
+	keys?: string[];
+	/** Scroll delta (for scroll action). */
+	deltaX?: number;
+	deltaY?: number;
+	/** Button for click actions. */
+	button?: "left" | "right" | "middle";
+}
+
+/**
+ * A computer use call in the assistant message content, analogous to ToolCall
+ * but for screen-action sequences rather than function invocations.
+ */
+export interface ComputerCall {
+	type: "computerCall";
+	/** Provider-specific call ID for pairing with the result. */
+	id: string;
+	/** Provider-specific item ID (OpenAI uses separate call_id and item id). */
+	itemId?: string;
+	/** The sequence of screen actions the model wants to perform. */
+	actions: ComputerAction[];
+}
+
+/**
+ * The result fed back to the model after executing a computer use call.
+ * Typically contains a screenshot image of the current screen state.
+ */
+export interface ComputerCallResultMessage {
+	role: "computerCallResult";
+	/** The call ID this result corresponds to. */
+	callId: string;
+	/** Screenshot or other visual content showing the result. */
+	content: (ImageContent | TextContent)[];
+	timestamp: number;
+}
+
 export interface Context {
 	systemPrompt?: string;
 	messages: Message[];
 	tools?: Tool[];
+	/** Computer use tool configuration. When set, the model can emit ComputerCall actions. */
+	computerUse?: ComputerUseTool;
 }
 
 /**
@@ -245,7 +313,13 @@ export type AssistantMessageEvent =
 	| { type: "toolcall_start"; contentIndex: number; partial: AssistantMessage }
 	| { type: "toolcall_delta"; contentIndex: number; delta: string; partial: AssistantMessage }
 	| { type: "toolcall_end"; contentIndex: number; toolCall: ToolCall; partial: AssistantMessage }
-	| { type: "done"; reason: Extract<StopReason, "stop" | "length" | "toolUse">; message: AssistantMessage }
+	| { type: "computercall_start"; contentIndex: number; partial: AssistantMessage }
+	| { type: "computercall_end"; contentIndex: number; computerCall: ComputerCall; partial: AssistantMessage }
+	| {
+			type: "done";
+			reason: Extract<StopReason, "stop" | "length" | "toolUse" | "computerUse">;
+			message: AssistantMessage;
+	  }
 	| { type: "error"; reason: Extract<StopReason, "aborted" | "error">; error: AssistantMessage };
 
 /**

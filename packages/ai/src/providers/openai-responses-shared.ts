@@ -16,6 +16,8 @@ import { calculateCost } from "../models.js";
 import type {
 	Api,
 	AssistantMessage,
+	ComputerAction,
+	ComputerCall,
 	Context,
 	ImageContent,
 	Model,
@@ -213,6 +215,18 @@ export function convertResponsesMessages<TApi extends Api>(
 			}
 			if (output.length === 0) continue;
 			messages.push(...output);
+		} else if (msg.role === "computerCallResult") {
+			// Computer use result: send back screenshot as computer_call_output
+			const imageContent = msg.content.find((c): c is ImageContent => c.type === "image");
+			const output: any = {
+				type: "computer_call_output",
+				call_id: (msg as any).callId,
+				output: {
+					type: "input_image",
+					image_url: imageContent ? `data:${imageContent.mimeType};base64,${imageContent.data}` : "",
+				},
+			};
+			messages.push(output);
 		} else if (msg.role === "toolResult") {
 			const textResult = msg.content
 				.filter((c): c is TextContent => c.type === "text")
@@ -264,15 +278,31 @@ export function convertResponsesMessages<TApi extends Api>(
 // Tool conversion
 // =============================================================================
 
-export function convertResponsesTools(tools: Tool[], options?: ConvertResponsesToolsOptions): OpenAITool[] {
+export interface ConvertResponsesToolsContext {
+	tools: Tool[];
+	computerUse?: Context["computerUse"];
+}
+
+export function convertResponsesTools(
+	tools: Tool[],
+	options?: ConvertResponsesToolsOptions,
+	context?: { computerUse?: Context["computerUse"] },
+): OpenAITool[] {
 	const strict = options?.strict === undefined ? false : options.strict;
-	return tools.map((tool) => ({
+	const result: OpenAITool[] = tools.map((tool) => ({
 		type: "function",
 		name: tool.name,
 		description: tool.description,
 		parameters: tool.parameters as any, // TypeBox already generates JSON Schema
 		strict,
 	}));
+
+	// Append the computer use tool if requested
+	if (context?.computerUse) {
+		result.push({ type: "computer" } as any);
+	}
+
+	return result;
 }
 
 // =============================================================================
@@ -286,8 +316,8 @@ export async function processResponsesStream<TApi extends Api>(
 	model: Model<TApi>,
 	options?: OpenAIResponsesStreamOptions,
 ): Promise<void> {
-	let currentItem: ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall | null = null;
-	let currentBlock: ThinkingContent | TextContent | (ToolCall & { partialJson: string }) | null = null;
+	let currentItem: ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall | any | null = null;
+	let currentBlock: ThinkingContent | TextContent | (ToolCall & { partialJson: string }) | ComputerCall | null = null;
 	const blocks = output.content;
 	const blockIndex = () => blocks.length - 1;
 
@@ -317,6 +347,18 @@ export async function processResponsesStream<TApi extends Api>(
 				};
 				output.content.push(currentBlock);
 				stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+			} else if ((item as any).type === "computer_call") {
+				// OpenAI Computer Use: a computer_call output item
+				currentItem = item;
+				const computerCall: ComputerCall = {
+					type: "computerCall",
+					id: (item as any).call_id || (item as any).id || "",
+					itemId: (item as any).id,
+					actions: [],
+				};
+				currentBlock = computerCall;
+				output.content.push(computerCall);
+				stream.push({ type: "computercall_start", contentIndex: blockIndex(), partial: output });
 			}
 		} else if (event.type === "response.reasoning_summary_part.added") {
 			if (currentItem && currentItem.type === "reasoning") {
@@ -411,6 +453,29 @@ export async function processResponsesStream<TApi extends Api>(
 				currentBlock.partialJson = event.arguments;
 				currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
 			}
+		} else if (event.type === "response.output_item.done" && (event as any).item?.type === "computer_call") {
+			// OpenAI Computer Use: computer_call completed
+			const item = event.item as any;
+			if (currentBlock?.type === "computerCall") {
+				currentBlock.id = item.call_id || item.id || currentBlock.id;
+				currentBlock.itemId = item.id || currentBlock.itemId;
+				// Parse actions from the completed item
+				currentBlock.actions = (item.actions || []).map(
+					(a: any): ComputerAction => ({
+						type: a.type,
+						x: a.x,
+						y: a.y,
+						text: a.text,
+						keys: a.keys,
+						deltaX: a.delta_x,
+						deltaY: a.delta_y,
+						button: a.button,
+					}),
+				);
+				const computerCall = currentBlock;
+				currentBlock = null;
+				stream.push({ type: "computercall_end", contentIndex: blockIndex(), computerCall, partial: output });
+			}
 		} else if (event.type === "response.output_item.done") {
 			const item = event.item;
 
@@ -475,6 +540,9 @@ export async function processResponsesStream<TApi extends Api>(
 			output.stopReason = mapStopReason(response?.status);
 			if (output.content.some((b) => b.type === "toolCall") && output.stopReason === "stop") {
 				output.stopReason = "toolUse";
+			}
+			if (output.content.some((b) => b.type === "computerCall") && output.stopReason === "stop") {
+				output.stopReason = "computerUse";
 			}
 		} else if (event.type === "error") {
 			throw new Error(`Error Code ${event.code}: ${event.message}` || "Unknown error");

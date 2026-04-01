@@ -147,7 +147,7 @@ function contentToText(content: string | Array<TextContent | ImageContent>): str
 		.join("\n");
 }
 
-function assistantContentToText(content: Array<TextContent | ThinkingContent | ToolCall>): string {
+function assistantContentToText(content: AssistantMessage["content"]): string {
 	return content
 		.map((block) => {
 			if (block.type === "text") {
@@ -155,6 +155,9 @@ function assistantContentToText(content: Array<TextContent | ThinkingContent | T
 			}
 			if (block.type === "thinking") {
 				return block.thinking;
+			}
+			if (block.type === "computerCall") {
+				return `computer:${JSON.stringify(block.actions)}`;
 			}
 			return `${block.name}:${JSON.stringify(block.arguments)}`;
 		})
@@ -170,9 +173,16 @@ function messageToText(message: Message): string {
 		return contentToText(message.content);
 	}
 	if (message.role === "assistant") {
-		return assistantContentToText(message.content);
+		return assistantContentToText(
+			message.content.filter(
+				(b): b is Exclude<typeof b, import("../types.js").ComputerCall> => b.type !== "computerCall",
+			),
+		);
 	}
-	return toolResultToText(message);
+	if (message.role === "computerCallResult") {
+		return `computerCallResult:${message.callId}`;
+	}
+	return toolResultToText(message as import("../types.js").ToolResultMessage);
 }
 
 function serializeContext(context: Context): string {
@@ -362,6 +372,13 @@ async function streamWithDeltas(
 			continue;
 		}
 
+		if (block.type === "computerCall") {
+			partial.content = [...partial.content, { type: "computerCall", id: block.id, actions: block.actions }];
+			stream.push({ type: "computercall_start", contentIndex: index, partial: { ...partial } });
+			stream.push({ type: "computercall_end", contentIndex: index, computerCall: block, partial: { ...partial } });
+			continue;
+		}
+
 		partial.content = [...partial.content, { type: "toolCall", id: block.id, name: block.name, arguments: {} }];
 		stream.push({ type: "toolcall_start", contentIndex: index, partial: { ...partial } });
 		for (const chunk of splitStringByTokenSize(JSON.stringify(block.arguments), minTokenSize, maxTokenSize)) {
@@ -375,7 +392,7 @@ async function streamWithDeltas(
 			stream.push({ type: "toolcall_delta", contentIndex: index, delta: chunk, partial: { ...partial } });
 		}
 		(partial.content[index] as ToolCall).arguments = block.arguments;
-		stream.push({ type: "toolcall_end", contentIndex: index, toolCall: block, partial: { ...partial } });
+		stream.push({ type: "toolcall_end", contentIndex: index, toolCall: block as ToolCall, partial: { ...partial } });
 	}
 
 	if (message.stopReason === "error" || message.stopReason === "aborted") {
