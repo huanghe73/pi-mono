@@ -257,6 +257,8 @@ export interface ComputerAction {
 	deltaY?: number;
 	/** Button for click actions. */
 	button?: "left" | "right" | "middle";
+	/** Drag path as array of {x, y} coordinates (for drag action). */
+	path?: Array<{ x: number; y: number }>;
 }
 
 /**

@@ -103,11 +103,9 @@ function parseOpenAIComputerAction(a: Record<string, unknown>): ComputerAction {
 	// Scroll deltas
 	if (typeof a.scroll_x === "number") action.deltaX = a.scroll_x;
 	if (typeof a.scroll_y === "number") action.deltaY = a.scroll_y;
-	// Drag path → store as-is in a future-proof way; for now map start/end to x/y
-	if (Array.isArray(a.path) && a.path.length > 0) {
-		const start = a.path[0] as { x?: number; y?: number };
-		if (typeof start.x === "number") action.x = start.x;
-		if (typeof start.y === "number") action.y = start.y;
+	// Drag path
+	if (Array.isArray(a.path)) {
+		action.path = (a.path as Array<{ x: number; y: number }>).map((p) => ({ x: p.x, y: p.y }));
 	}
 	return action;
 }
@@ -125,6 +123,7 @@ function serializeOpenAIComputerAction(a: ComputerAction): Record<string, unknow
 	if (a.keys) out.keys = a.keys;
 	if (a.deltaX !== undefined) out.scroll_x = a.deltaX;
 	if (a.deltaY !== undefined) out.scroll_y = a.deltaY;
+	if (a.path) out.path = a.path;
 	return out;
 }
 
