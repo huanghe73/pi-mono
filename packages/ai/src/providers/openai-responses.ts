@@ -213,6 +213,11 @@ function buildParams(model: Model<"openai-responses">, context: Context, options
 		params.tools = convertResponsesTools(context.tools ?? [], undefined, { computerUse: context.computerUse });
 	}
 
+	// Computer use models require truncation=auto
+	if (context.computerUse) {
+		(params as any).truncation = "auto";
+	}
+
 	if (model.reasoning) {
 		if (options?.reasoningEffort || options?.reasoningSummary) {
 			params.reasoning = {

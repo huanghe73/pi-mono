@@ -365,13 +365,23 @@ export function convertResponsesTools(
 		strict,
 	}));
 
-	// Append the computer use tool if requested
+	// Append the computer use tool if requested.
+	// OpenAI has two computer tool types:
+	// - "computer" (ComputerUseTool): for gpt-5.4+, no params needed
+	// - "computer_use_preview" (ComputerTool): for computer-use-preview model, requires dimensions + environment
+	// We emit "computer" by default (works with gpt-5.4) and fall back to "computer_use_preview"
+	// when explicit dimensions are provided (for computer-use-preview model).
 	if (context?.computerUse) {
-		result.push({
-			type: "computer",
-			...(context.computerUse.displayWidth && { display_width: context.computerUse.displayWidth }),
-			...(context.computerUse.displayHeight && { display_height: context.computerUse.displayHeight }),
-		} as any);
+		if (context.computerUse.displayWidth || context.computerUse.displayHeight) {
+			result.push({
+				type: "computer_use_preview",
+				display_width: context.computerUse.displayWidth || 1024,
+				display_height: context.computerUse.displayHeight || 768,
+				environment: "browser",
+			} as any);
+		} else {
+			result.push({ type: "computer" } as any);
+		}
 	}
 
 	return result;

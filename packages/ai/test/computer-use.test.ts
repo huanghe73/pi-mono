@@ -170,15 +170,25 @@ describe("computer use with faux provider", () => {
 });
 
 describe("OpenAI Responses tool conversion with computer use", () => {
-	it("appends computer tool when computerUse is set", () => {
+	it("appends computer_use_preview tool when dimensions are provided", () => {
 		const tools = convertResponsesTools([], undefined, {
 			computerUse: { type: "computer_use", displayWidth: 1024, displayHeight: 768 },
 		});
 
 		expect(tools).toHaveLength(1);
-		expect((tools[0] as any).type).toBe("computer");
+		expect((tools[0] as any).type).toBe("computer_use_preview");
 		expect((tools[0] as any).display_width).toBe(1024);
 		expect((tools[0] as any).display_height).toBe(768);
+		expect((tools[0] as any).environment).toBe("browser");
+	});
+
+	it("appends computer tool (no params) when no dimensions are provided", () => {
+		const tools = convertResponsesTools([], undefined, {
+			computerUse: { type: "computer_use" },
+		});
+
+		expect(tools).toHaveLength(1);
+		expect((tools[0] as any).type).toBe("computer");
 	});
 
 	it("includes both function tools and computer tool", () => {
