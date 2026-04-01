@@ -247,17 +247,14 @@ export function convertResponsesMessages<TApi extends Api>(
 						id: cuBlock.itemId || cuBlock.id,
 						call_id: cuBlock.id,
 						status: "completed",
-						pending_safety_checks: [],
 					};
-					if (cuBlock.actions.length === 1) {
-						// Singular action (most common path)
-						replayItem.action = serializeOpenAIComputerAction(cuBlock.actions[0]);
-					} else if (cuBlock.actions.length > 1) {
-						// Batched actions
+					// Always use batched `actions` array — the `computer` tool (gpt-5.4) requires it
+					if (cuBlock.actions.length > 0) {
 						replayItem.actions = cuBlock.actions.map(serializeOpenAIComputerAction);
 					} else {
-						replayItem.action = { type: "screenshot" };
+						replayItem.actions = [{ type: "screenshot" }];
 					}
+					// console.log("[DEBUG] Replaying computer_call:", JSON.stringify(replayItem));
 					output.push(replayItem as any);
 				} else if (block.type === "toolCall") {
 					const toolCall = block as ToolCall;
