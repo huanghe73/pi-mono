@@ -319,8 +319,8 @@ function buildRequestBody(
 		body.temperature = options.temperature;
 	}
 
-	if (context.tools) {
-		body.tools = convertResponsesTools(context.tools, { strict: null }, { computerUse: context.computerUse });
+	if (context.tools || context.computerUse) {
+		body.tools = convertResponsesTools(context.tools ?? [], { strict: null }, { computerUse: context.computerUse });
 	}
 
 	if (options?.reasoningEffort !== undefined) {

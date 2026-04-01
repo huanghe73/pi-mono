@@ -228,8 +228,8 @@ function buildParams(
 		params.temperature = options?.temperature;
 	}
 
-	if (context.tools) {
-		params.tools = convertResponsesTools(context.tools, undefined, { computerUse: context.computerUse });
+	if (context.tools || context.computerUse) {
+		params.tools = convertResponsesTools(context.tools ?? [], undefined, { computerUse: context.computerUse });
 	}
 
 	if (model.reasoning) {

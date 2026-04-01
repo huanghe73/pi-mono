@@ -209,8 +209,8 @@ function buildParams(model: Model<"openai-responses">, context: Context, options
 		params.service_tier = options.serviceTier;
 	}
 
-	if (context.tools) {
-		params.tools = convertResponsesTools(context.tools, undefined, { computerUse: context.computerUse });
+	if (context.tools || context.computerUse) {
+		params.tools = convertResponsesTools(context.tools ?? [], undefined, { computerUse: context.computerUse });
 	}
 
 	if (model.reasoning) {

@@ -192,6 +192,21 @@ export function convertResponsesMessages<TApi extends Api>(
 						id: msgId,
 						phase: parsedSignature?.phase,
 					} satisfies ResponseOutputMessage);
+				} else if (block.type === "computerCall") {
+					// Replay prior computer_call items so the API can pair them with computer_call_output
+					const cuBlock = block as ComputerCall;
+					output.push({
+						type: "computer_call",
+						id: cuBlock.itemId || cuBlock.id,
+						call_id: cuBlock.id,
+						action: cuBlock.actions[0] ? {
+							type: cuBlock.actions[0].type,
+							...(cuBlock.actions[0].x !== undefined && { x: cuBlock.actions[0].x }),
+							...(cuBlock.actions[0].y !== undefined && { y: cuBlock.actions[0].y }),
+							...(cuBlock.actions[0].text && { text: cuBlock.actions[0].text }),
+						} : { type: "screenshot" },
+						status: "completed",
+					} as any);
 				} else if (block.type === "toolCall") {
 					const toolCall = block as ToolCall;
 					const [callId, itemIdRaw] = toolCall.id.split("|");
@@ -463,23 +478,26 @@ export async function processResponsesStream<TApi extends Api>(
 			}
 		} else if (event.type === "response.output_item.done" && (event.item as { type: string }).type === "computer_call") {
 			// OpenAI Computer Use: computer_call completed
-			const item = event.item as unknown as ComputerCallItem & { actions?: Array<Record<string, unknown>> };
+			// The OpenAI SDK exposes a singular `action` object (not an `actions` array),
+			// with `scroll_x`/`scroll_y` for scroll actions.
+			const item = event.item as unknown as ComputerCallItem & { action?: Record<string, unknown> };
 			if (currentBlock?.type === "computerCall") {
 				currentBlock.id = item.call_id || item.id || currentBlock.id;
 				currentBlock.itemId = item.id || currentBlock.itemId;
-				// Parse actions from the completed item
-				currentBlock.actions = (item.actions || []).map(
-					(a: any): ComputerAction => ({
-						type: a.type,
-						x: a.x,
-						y: a.y,
-						text: a.text,
-						keys: a.keys,
-						deltaX: a.delta_x,
-						deltaY: a.delta_y,
-						button: a.button,
-					}),
-				);
+				// Parse the singular action from the completed item
+				const a = item.action;
+				if (a) {
+					currentBlock.actions = [{
+						type: a.type as ComputerAction["type"],
+						x: a.x as number | undefined,
+						y: a.y as number | undefined,
+						text: a.text as string | undefined,
+						keys: a.keys as string[] | undefined,
+						deltaX: (a.scroll_x ?? a.delta_x) as number | undefined,
+						deltaY: (a.scroll_y ?? a.delta_y) as number | undefined,
+						button: a.button as ComputerAction["button"],
+					}];
+				}
 				const computerCall = currentBlock;
 				currentBlock = null;
 				stream.push({ type: "computercall_end", contentIndex: blockIndex(), computerCall, partial: output });
