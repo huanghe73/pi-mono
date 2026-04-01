@@ -177,6 +177,8 @@ describe("OpenAI Responses tool conversion with computer use", () => {
 
 		expect(tools).toHaveLength(1);
 		expect((tools[0] as any).type).toBe("computer");
+		expect((tools[0] as any).display_width).toBe(1024);
+		expect((tools[0] as any).display_height).toBe(768);
 	});
 
 	it("includes both function tools and computer tool", () => {
@@ -200,5 +202,55 @@ describe("OpenAI Responses tool conversion with computer use", () => {
 	it("does not append computer tool when computerUse is undefined", () => {
 		const tools = convertResponsesTools([], undefined, {});
 		expect(tools).toHaveLength(0);
+	});
+});
+
+describe("mixed tool calls and computer calls", () => {
+	it("stopReason is toolUse when both toolCall and computerCall are present", async () => {
+		const registration = registerFauxProvider();
+		registrations.push(registration);
+
+		registration.setResponses([
+			{
+				...fauxAssistantMessage(""),
+				content: [
+					{ type: "toolCall", id: "tc_1", name: "bash", arguments: { command: "ls" } },
+					{ type: "computerCall", id: "cc_1", actions: [{ type: "click", x: 10, y: 20 }] },
+				],
+				stopReason: "toolUse",
+			},
+		]);
+
+		const context: Context = {
+			messages: [{ role: "user", content: "do both", timestamp: Date.now() }],
+			tools: [{ name: "bash", description: "Run bash", parameters: { type: "object", properties: {} } } as any],
+			computerUse: { type: "computer_use" },
+		};
+
+		const response = await complete(registration.getModel(), context);
+		// toolUse takes precedence when both are present
+		expect(response.stopReason).toBe("toolUse");
+		expect(response.content).toHaveLength(2);
+	});
+
+	it("stopReason is computerUse when only computerCall is present", async () => {
+		const registration = registerFauxProvider();
+		registrations.push(registration);
+
+		registration.setResponses([
+			{
+				...fauxAssistantMessage(""),
+				content: [{ type: "computerCall", id: "cc_2", actions: [{ type: "screenshot" }] }],
+				stopReason: "computerUse",
+			},
+		]);
+
+		const context: Context = {
+			messages: [{ role: "user", content: "screenshot", timestamp: Date.now() }],
+			computerUse: { type: "computer_use" },
+		};
+
+		const response = await complete(registration.getModel(), context);
+		expect(response.stopReason).toBe("computerUse");
 	});
 });

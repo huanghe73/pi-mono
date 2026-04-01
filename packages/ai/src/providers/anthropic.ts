@@ -467,8 +467,10 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 				throw new Error("An unknown error occurred");
 			}
 
-			// Detect computer use stop reason
-			if (output.content.some((b) => b.type === "computerCall") && output.stopReason === "toolUse") {
+			// Detect computer use stop reason (only if no regular tool calls present)
+			const hasToolCalls = output.content.some((b) => b.type === "toolCall");
+			const hasComputerCalls = output.content.some((b) => b.type === "computerCall");
+			if (!hasToolCalls && hasComputerCalls && output.stopReason === "toolUse") {
 				output.stopReason = "computerUse";
 			}
 
@@ -852,18 +854,33 @@ function convertMessages(
 					}
 				} else if (block.type === "computerCall") {
 					// Re-emit computer use as tool_use with name "computer" for Anthropic
-					const action = block.actions[0];
-					const input: Record<string, any> = { action: action?.type || "screenshot" };
-					if (action?.x !== undefined && action?.y !== undefined) {
-						input.coordinate = [action.x, action.y];
+					// Anthropic expects a single action per tool_use block, so emit one per action
+					for (const action of block.actions) {
+						const input: Record<string, unknown> = { action: action.type || "screenshot" };
+						if (action.x !== undefined && action.y !== undefined) {
+							input.coordinate = [action.x, action.y];
+						}
+						if (action.text) input.text = action.text;
+						if (action.keys) input.text = action.keys.join("+");
+						if (action.deltaX !== undefined || action.deltaY !== undefined) {
+							input.coordinate = [action.deltaX ?? 0, action.deltaY ?? 0];
+						}
+						blocks.push({
+							type: "tool_use",
+							id: block.id,
+							name: "computer",
+							input,
+						} as any);
 					}
-					if (action?.text) input.text = action.text;
-					blocks.push({
-						type: "tool_use",
-						id: block.id,
-						name: "computer",
-						input,
-					} as any);
+					// If no actions, emit a screenshot request
+					if (block.actions.length === 0) {
+						blocks.push({
+							type: "tool_use",
+							id: block.id,
+							name: "computer",
+							input: { action: "screenshot" },
+						} as any);
+					}
 				} else if (block.type === "toolCall") {
 					blocks.push({
 						type: "tool_use",

@@ -571,6 +571,9 @@ function convertMessages(
 							if (c.text.trim().length === 0) continue;
 							contentBlocks.push({ text: sanitizeSurrogates(c.text) });
 							break;
+						case "computerCall":
+							// Bedrock does not support computer use; skip
+							continue;
 						case "toolCall":
 							contentBlocks.push({
 								toolUse: { toolUseId: c.id, name: c.name, input: c.arguments },
@@ -620,6 +623,9 @@ function convertMessages(
 				});
 				break;
 			}
+			case "computerCallResult":
+				// Bedrock does not support computer use; skip
+				continue;
 			case "toolResult": {
 				// Collect all consecutive toolResult messages into a single user message
 				// Bedrock requires all tool results to be in one message

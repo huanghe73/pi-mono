@@ -217,16 +217,17 @@ export function convertResponsesMessages<TApi extends Api>(
 			messages.push(...output);
 		} else if (msg.role === "computerCallResult") {
 			// Computer use result: send back screenshot as computer_call_output
-			const imageContent = msg.content.find((c): c is ImageContent => c.type === "image");
-			const output: any = {
+			const cuMsg = msg as import("../types.js").ComputerCallResultMessage;
+			const imageContent = cuMsg.content.find((c): c is ImageContent => c.type === "image");
+			const result: any = {
 				type: "computer_call_output",
-				call_id: (msg as any).callId,
+				call_id: cuMsg.callId,
 				output: {
-					type: "input_image",
+					type: "computer_screenshot",
 					image_url: imageContent ? `data:${imageContent.mimeType};base64,${imageContent.data}` : "",
 				},
 			};
-			messages.push(output);
+			messages.push(result);
 		} else if (msg.role === "toolResult") {
 			const textResult = msg.content
 				.filter((c): c is TextContent => c.type === "text")
@@ -299,7 +300,11 @@ export function convertResponsesTools(
 
 	// Append the computer use tool if requested
 	if (context?.computerUse) {
-		result.push({ type: "computer" } as any);
+		result.push({
+			type: "computer",
+			...(context.computerUse.displayWidth && { display_width: context.computerUse.displayWidth }),
+			...(context.computerUse.displayHeight && { display_height: context.computerUse.displayHeight }),
+		} as any);
 	}
 
 	return result;
@@ -316,7 +321,9 @@ export async function processResponsesStream<TApi extends Api>(
 	model: Model<TApi>,
 	options?: OpenAIResponsesStreamOptions,
 ): Promise<void> {
-	let currentItem: ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall | any | null = null;
+	// OpenAI computer_call items are not yet typed in the SDK, so we use a minimal shape
+	interface ComputerCallItem { type: "computer_call"; id?: string; call_id?: string; actions?: unknown[] }
+	let currentItem: ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall | ComputerCallItem | null = null;
 	let currentBlock: ThinkingContent | TextContent | (ToolCall & { partialJson: string }) | ComputerCall | null = null;
 	const blocks = output.content;
 	const blockIndex = () => blocks.length - 1;
@@ -347,13 +354,14 @@ export async function processResponsesStream<TApi extends Api>(
 				};
 				output.content.push(currentBlock);
 				stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
-			} else if ((item as any).type === "computer_call") {
+			} else if ((item as { type: string }).type === "computer_call") {
 				// OpenAI Computer Use: a computer_call output item
-				currentItem = item;
+				const cuItem = item as unknown as ComputerCallItem;
+				currentItem = cuItem;
 				const computerCall: ComputerCall = {
 					type: "computerCall",
-					id: (item as any).call_id || (item as any).id || "",
-					itemId: (item as any).id,
+					id: cuItem.call_id || cuItem.id || "",
+					itemId: cuItem.id,
 					actions: [],
 				};
 				currentBlock = computerCall;
@@ -453,9 +461,9 @@ export async function processResponsesStream<TApi extends Api>(
 				currentBlock.partialJson = event.arguments;
 				currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
 			}
-		} else if (event.type === "response.output_item.done" && (event as any).item?.type === "computer_call") {
+		} else if (event.type === "response.output_item.done" && (event.item as { type: string }).type === "computer_call") {
 			// OpenAI Computer Use: computer_call completed
-			const item = event.item as any;
+			const item = event.item as unknown as ComputerCallItem & { actions?: Array<Record<string, unknown>> };
 			if (currentBlock?.type === "computerCall") {
 				currentBlock.id = item.call_id || item.id || currentBlock.id;
 				currentBlock.itemId = item.id || currentBlock.itemId;
@@ -538,10 +546,12 @@ export async function processResponsesStream<TApi extends Api>(
 			}
 			// Map status to stop reason
 			output.stopReason = mapStopReason(response?.status);
-			if (output.content.some((b) => b.type === "toolCall") && output.stopReason === "stop") {
+			const hasToolCalls = output.content.some((b) => b.type === "toolCall");
+			const hasComputerCalls = output.content.some((b) => b.type === "computerCall");
+			if (hasToolCalls && output.stopReason === "stop") {
+				// toolUse takes precedence when both tool calls and computer calls are present
 				output.stopReason = "toolUse";
-			}
-			if (output.content.some((b) => b.type === "computerCall") && output.stopReason === "stop") {
+			} else if (hasComputerCalls && output.stopReason === "stop") {
 				output.stopReason = "computerUse";
 			}
 		} else if (event.type === "error") {

@@ -320,7 +320,7 @@ function buildRequestBody(
 	}
 
 	if (context.tools) {
-		body.tools = convertResponsesTools(context.tools, { strict: null });
+		body.tools = convertResponsesTools(context.tools, { strict: null }, { computerUse: context.computerUse });
 	}
 
 	if (options?.reasoningEffort !== undefined) {

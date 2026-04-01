@@ -173,11 +173,7 @@ function messageToText(message: Message): string {
 		return contentToText(message.content);
 	}
 	if (message.role === "assistant") {
-		return assistantContentToText(
-			message.content.filter(
-				(b): b is Exclude<typeof b, import("../types.js").ComputerCall> => b.type !== "computerCall",
-			),
-		);
+		return assistantContentToText(message.content);
 	}
 	if (message.role === "computerCallResult") {
 		return `computerCallResult:${message.callId}`;
