@@ -916,6 +916,26 @@ async function generateModels() {
 		});
 	}
 
+	if (!allModels.some((m) => m.provider === "openai" && m.id === "gpt-5.5")) {
+		allModels.push({
+			id: "gpt-5.5",
+			name: "GPT-5.5",
+			api: "openai-responses",
+			baseUrl: "https://api.openai.com/v1",
+			provider: "openai",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: {
+				input: 5,
+				output: 30,
+				cacheRead: 0.5,
+				cacheWrite: 0,
+			},
+			contextWindow: 1050000,
+			maxTokens: 128000,
+		});
+	}
+
 	const minimaxDirectSupportedIds = new Set(["MiniMax-M2.7", "MiniMax-M2.7-highspeed"]);
 
 	for (const candidate of allModels) {

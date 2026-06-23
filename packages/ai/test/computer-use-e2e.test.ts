@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { complete, getModel, stream } from "../src/index.js";
-import type { Api, AssistantMessageEvent, ComputerCall, Context, Model } from "../src/types.js";
+import type { AssistantMessageEvent, ComputerCall, Context } from "../src/types.js";
 
 // Load .env if present
 try {
@@ -40,13 +40,13 @@ const TINY_PNG_BASE64 =
 
 describe.skipIf(!hasOpenAIKey)("OpenAI Computer Use E2E", () => {
 	it("sends a computer-use request and receives a computer_call action", async () => {
-		// Use computer-use-preview model — purpose-built for computer use
-		// Try gpt-5.4 (GA computer use), fall back to gpt-4o
-	const model = getModel("openai", "gpt-5.4") ?? getModel("openai", "gpt-4o")!;
+		// Try gpt-5.5 (GA computer use), fall back to gpt-4o
+		const model = getModel("openai", "gpt-5.5") ?? getModel("openai", "gpt-4o")!;
 		expect(model).toBeDefined();
 
 		const context: Context = {
-			systemPrompt: "You are controlling a computer. The user has given you a screenshot. Perform the requested action.",
+			systemPrompt:
+				"You are controlling a computer. The user has given you a screenshot. Perform the requested action.",
 			messages: [
 				{
 					role: "user",
@@ -64,7 +64,10 @@ describe.skipIf(!hasOpenAIKey)("OpenAI Computer Use E2E", () => {
 
 		console.log("stopReason:", response.stopReason);
 		console.log("errorMessage:", response.errorMessage);
-		console.log("content types:", response.content.map((c) => c.type));
+		console.log(
+			"content types:",
+			response.content.map((c) => c.type),
+		);
 
 		// The model should respond with a computer_call (click, screenshot, etc.)
 		expect(response.stopReason).toBe("computerUse");
@@ -78,12 +81,14 @@ describe.skipIf(!hasOpenAIKey)("OpenAI Computer Use E2E", () => {
 		const action = computerCall!.actions[0];
 		console.log("action:", JSON.stringify(action));
 		// The action should have a valid type
-		expect(["click", "double_click", "type", "keypress", "scroll", "screenshot", "drag", "move", "wait"]).toContain(action.type);
+		expect(["click", "double_click", "type", "keypress", "scroll", "screenshot", "drag", "move", "wait"]).toContain(
+			action.type,
+		);
 	}, 30000);
 
 	it("streams computer_call events correctly", async () => {
-		// Try gpt-5.4 (GA computer use), fall back to gpt-4o
-	const model = getModel("openai", "gpt-5.4") ?? getModel("openai", "gpt-4o")!;
+		// Try gpt-5.5 (GA computer use), fall back to gpt-4o
+		const model = getModel("openai", "gpt-5.5") ?? getModel("openai", "gpt-4o")!;
 		expect(model).toBeDefined();
 
 		const context: Context = {

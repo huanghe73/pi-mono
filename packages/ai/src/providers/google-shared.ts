@@ -155,8 +155,6 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 						});
 					}
 				} else if (block.type === "computerCall") {
-					// Google does not support computer use; skip
-					continue;
 				} else if (block.type === "toolCall") {
 					const thoughtSignature = resolveThoughtSignature(isSameProviderAndModel, block.thoughtSignature);
 					// Gemini 3 requires thoughtSignature on all function calls when thinking mode is enabled.
@@ -182,8 +180,6 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 				parts,
 			});
 		} else if (msg.role === "computerCallResult") {
-			// Google does not support computer use; skip
-			continue;
 		} else if (msg.role === "toolResult") {
 			// Extract text and image content
 			const textContent = msg.content.filter((c): c is TextContent => c.type === "text");

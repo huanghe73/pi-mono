@@ -396,8 +396,14 @@ export async function processResponsesStream<TApi extends Api>(
 	options?: OpenAIResponsesStreamOptions,
 ): Promise<void> {
 	// OpenAI computer_call items are not yet typed in the SDK, so we use a minimal shape
-	interface ComputerCallItem { type: "computer_call"; id?: string; call_id?: string; actions?: unknown[] }
-	let currentItem: ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall | ComputerCallItem | null = null;
+	interface ComputerCallItem {
+		type: "computer_call";
+		id?: string;
+		call_id?: string;
+		actions?: unknown[];
+	}
+	let currentItem: ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall | ComputerCallItem | null =
+		null;
 	let currentBlock: ThinkingContent | TextContent | (ToolCall & { partialJson: string }) | ComputerCall | null = null;
 	const blocks = output.content;
 	const blockIndex = () => blocks.length - 1;
@@ -535,7 +541,10 @@ export async function processResponsesStream<TApi extends Api>(
 				currentBlock.partialJson = event.arguments;
 				currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
 			}
-		} else if (event.type === "response.output_item.done" && (event.item as { type: string }).type === "computer_call") {
+		} else if (
+			event.type === "response.output_item.done" &&
+			(event.item as { type: string }).type === "computer_call"
+		) {
 			// OpenAI Computer Use: computer_call completed.
 			// The SDK exposes both a singular `action` and a batched `actions` field.
 			const item = event.item as unknown as ComputerCallItem & {
